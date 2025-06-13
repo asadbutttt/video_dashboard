@@ -32,6 +32,10 @@
                 <div class="d-flex justify-content-between align-items-center">
                     <h1 class="h3">Video Processing Dashboard</h1>
                     <div>
+                        <button class="btn btn-warning" onclick="resetStuckConversions()">
+                            <i class="bi bi-arrow-counterclockwise"></i>
+                            Reset Stuck
+                        </button>
                         <button class="btn btn-primary" onclick="scanFolder()">
                             <i class="bi bi-folder-plus"></i>
                             Scan INPUT Folder
@@ -211,6 +215,24 @@
             toast.className = `toast border-${type}`;
             toastBody.textContent = message;
             new bootstrap.Toast(toast).show();
+        }
+
+        function resetStuckConversions() {
+            if (!confirm('Reset all stuck conversions? This will mark IN_PROGRESS movies as ERROR.')) return;
+            
+            fetch('/reset-stuck', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast(data.message, 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showToast(data.error || 'Reset failed', 'danger');
+                    }
+                })
+                .catch(error => {
+                    showToast('Reset failed: ' + error.message, 'danger');
+                });
         }
 
         function scanFolder() {

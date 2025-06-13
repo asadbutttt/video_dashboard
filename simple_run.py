@@ -8,6 +8,8 @@ from pathlib import Path
 import ffmpeg
 from datetime import datetime, timezone
 import random
+import logging
+from logging.handlers import RotatingFileHandler
 import string
 import json
 
@@ -21,9 +23,33 @@ app.config['SECRET_KEY'] = 'simple-video-dashboard'
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DATABASE_PATH}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Configure logging
+if not os.path.exists('logs'):
+    os.makedirs('logs')
+
+logger = logging.getLogger(__name__)
+
+# Create date-based log filename
+current_date = datetime.now().strftime('%Y%m%d_%H%M%S')
+log_filename = f'logs/video_dashboard_{current_date}.log'
+
+# Set up file handler with rotation (per day)
+file_handler = RotatingFileHandler(log_filename, maxBytes=10485760, backupCount=5)
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+))
+file_handler.setLevel(logging.INFO)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+console_handler.setLevel(logging.INFO)
+
+app.logger.addHandler(file_handler)
+app.logger.addHandler(console_handler)
+app.logger.setLevel(logging.INFO)
+app.logger.info("Video Processing Dashboard starting up...")
+
 db = SQLAlchemy(app)
-
-
 
 # Create data directory if it doesn't exist
 (BASE_DIR / 'data').mkdir(exist_ok=True)
@@ -83,16 +109,50 @@ class Movie(db.Model):
         if not self.source_resolution:
             return ['720p', '480p', '360p']
         
-        height = int(self.source_resolution.split('x')[1]) if 'x' in self.source_resolution else 1080
-        
-        if height >= 1080:
+        try:
+            width, height = map(int, self.source_resolution.split('x'))
+            
+            # Calculate source quality based on pixel count, not just height
+            source_pixels = width * height
+            
+            target_qualities = []
+            
+            # Always include 360p (minimum streaming quality)
+            target_qualities.append('360p')
+            
+            # Include 480p if source has enough pixels (better than 480p)
+            if source_pixels >= (854 * 480):  # 409,920 pixels
+                target_qualities.append('480p')
+            
+            # Include 720p if source has enough pixels (better than 720p)  
+            if source_pixels >= (1280 * 720):  # 921,600 pixels
+                target_qualities.append('720p')
+            
+            # Include 1080p only if source is significantly better than 1080p
+            if source_pixels >= (1920 * 1080 * 1.2):  # 20% more than 1080p
+                target_qualities.append('1080p')
+            
+            return target_qualities
+            
+        except Exception as e:
+            app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
+            # Fallback to all qualities if parsing fails
             return ['720p', '480p', '360p']
-        elif height >= 720:
-            return ['480p', '360p']
-        elif height >= 480:
-            return ['360p']
-        else:
-            return []
+
+    # def get_target_qualities(self):
+    #     if not self.source_resolution:
+    #         return ['720p', '480p', '360p']
+        
+    #     height = int(self.source_resolution.split('x')[1]) if 'x' in self.source_resolution else 1080
+        
+    #     if height >= 1080:
+    #         return ['720p', '480p', '360p']
+    #     elif height >= 720:
+    #         return ['480p', '360p']
+    #     elif height >= 480:
+    #         return ['360p']
+    #     else:
+    #         return []
 
 # Utility Functions
 def get_video_info(file_path):
@@ -112,6 +172,7 @@ def get_video_info(file_path):
                 'duration': duration
             }
     except Exception as e:
+        app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
         print(f"Error getting video info: {e}")
         return None
 
@@ -153,6 +214,7 @@ def scan_input_folder():
                     'subdirectory': subdirectory  # New field
                 })
             except Exception as e:
+                app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
                 print(f"Error processing file {file_path}: {e}")
     
     return video_files
@@ -174,9 +236,15 @@ def convert_video_simple(movie_id):
             
             # Update status
             movie.status = 'IN_PROGRESS'
+            app.logger.info(f"CONVERSION_START: Movie {movie_id} ({movie.filename}) - Status: IN_PROGRESS, Initial Progress: 0%")
             movie.overall_progress = 0
+            conversion_start_time = time.time()
             db.session.commit()
-            conversion_status[movie_id] = {'status': 'IN_PROGRESS', 'progress': 0}
+            conversion_status[movie_id] = {
+                'status': 'IN_PROGRESS',
+                'progress': 0,
+                'start_time': conversion_start_time
+                }
             
             # Display subdirectory info
             subdir_info = f" (Subdirectory: {movie.subdirectory})" if movie.subdirectory else " (Root folder)"
@@ -210,7 +278,12 @@ def convert_video_simple(movie_id):
                 return
             
             # Start progress monitoring thread
-            progress_data = {'current_progress': 0, 'current_quality': '', 'stop_monitoring': False}
+            progress_data = {
+                'current_progress': 0,
+                'current_quality': '',
+                'stop_monitoring': False,
+                'start_time': conversion_start_time
+                }
             monitor_thread = threading.Thread(
                 target=monitor_progress, 
                 args=(movie_id, movie.filename, progress_data, movie.subdirectory),
@@ -223,6 +296,7 @@ def convert_video_simple(movie_id):
             total_qualities = len(target_qualities)
             
             for i, quality in enumerate(target_qualities):
+                app.logger.info(f"QUALITY_START: Movie {movie_id} - Starting {quality} conversion ({i+1}/{total_qualities})")
                 try:
                     quality_config = QUALITIES[quality]
                     quality_dir = output_dir / quality
@@ -276,13 +350,35 @@ def convert_video_simple(movie_id):
                         
                         # Update overall progress
                         overall_progress = int(((i + 1) / total_qualities) * 90)
+                        app.logger.info(f"PROGRESS_UPDATE: Movie {movie_id} - Overall Progress: {overall_progress}% - Completed {quality}")
                         movie.overall_progress = overall_progress
+
+                        # Calculate ETA for overall conversion
+                        elapsed_time = time.time() - conversion_start_time
+                        if overall_progress > 5:
+                            estimated_total_time = elapsed_time * (100 / overall_progress)
+                            remaining_time = estimated_total_time - elapsed_time
+                            eta_hours = int(remaining_time // 3600)
+                            eta_minutes = int((remaining_time % 3600) // 60)
+                            eta_str = f"{eta_hours:02d}:{eta_minutes:02d}"
+                        else:
+                            eta_str = "--:--"
+
                         db.session.commit()
-                        conversion_status[movie_id] = {'status': 'IN_PROGRESS', 'progress': overall_progress}
+                        conversion_status[movie_id] = {
+                            'status': 'IN_PROGRESS',
+                            'progress': overall_progress,
+                            'eta': eta_str
+                            }
+                        app.logger.info(
+                            f"PROGRESS_UPDATE: Movie {movie_id} - Overall Progress: {overall_progress}% - "
+                            f"Completed {quality} - ETA: {eta_str}"
+                        )
                     else:
                         print(f"❌ Failed {quality} conversion")
                         
                 except Exception as e:
+                    app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
                     print(f"❌ Error converting {quality}: {e}")
             
             # Stop progress monitoring
@@ -295,6 +391,7 @@ def convert_video_simple(movie_id):
             
             # Update final status
             movie.status = 'DONE' if completed_qualities else 'ERROR'
+            app.logger.info(f"CONVERSION_COMPLETE: Movie {movie_id} - Final Status: {movie.status}, Progress: 100%, Qualities: {completed_qualities}")
             movie.overall_progress = 100
             movie.completed_at = datetime.now(timezone.utc)
             db.session.commit()
@@ -312,6 +409,7 @@ def convert_video_simple(movie_id):
             print("=" * 60)
             
         except Exception as e:
+            app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
             print(f"💥 Error in conversion: {e}")
             try:
                 movie = db.session.get(Movie, movie_id)
@@ -319,7 +417,8 @@ def convert_video_simple(movie_id):
                     movie.status = 'ERROR'
                     movie.completed_at = datetime.now()
                     db.session.commit()
-            except:
+            except Exception as e:
+                app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
                 pass
             conversion_status[movie_id] = {'status': 'ERROR', 'progress': 0}
 
@@ -333,13 +432,28 @@ def monitor_progress(movie_id, filename, progress_data, subdirectory=None):
         # Update every 30 seconds
         if current_time - last_update >= 30:
             if progress_data['current_quality'] and progress_data['current_progress'] > 0:
+                # Calculate ETA
+                elapsed_time = current_time - progress_data['start_time']
+                progress_percent = progress_data['current_progress']
+
+                if progress_percent > 5:  # Only calculate ETA after 5% to avoid wild estimates
+                    estimated_total_time = elapsed_time * (100 / progress_percent)
+                    remaining_time = estimated_total_time - elapsed_time
+                    eta_hours = int(remaining_time // 3600)
+                    eta_minutes = int((remaining_time % 3600) // 60)
+                    eta_str = f"{eta_hours:02d}:{eta_minutes:02d}"
+                else:
+                    eta_str = "--:--"
+
                 subdir_info = f" (📁 {subdirectory})" if subdirectory else " (📁 Root)"
-                print(f"\n📈 PROGRESS UPDATE:")
-                print(f"   🎬 Movie ID: {movie_id}")
-                print(f"   📁 File: {filename}{subdir_info}")
-                print(f"   🎯 Quality: {progress_data['current_quality']}")
-                print(f"   ⚡ Progress: {progress_data['current_progress']:.3f}%")
-                print(f"   🕐 Time: {datetime.now().strftime('%H:%M:%S')}")
+                logger.info(
+                    f"LIVE_PROGRESS: {movie_id} | {filename}{subdir_info} | "
+                    f"{progress_data['current_quality']} | {progress_data['current_progress']:.2f}% | "
+                    f"ETA: {eta_str}"
+                )
+                print(f"\nPROGRESS UPDATE:")
+                print(f"-------File: {filename}{subdir_info}")
+                print(f"-------{movie_id} | {progress_data['current_quality']} | {progress_data['current_progress']:.1f}% | ETA: {eta_str} | {datetime.now().strftime('%H:%M:%S')}")
                 print("-" * 40)
             
             last_update = current_time
@@ -371,8 +485,13 @@ def monitor_ffmpeg_progress(process, total_duration, progress_data, quality):
                 if total_duration > 0:
                     progress = (current_time / total_duration) * 100
                     progress_data['current_progress'] = min(progress, 100)
+                    # Log every 10% progress milestone
+                    if int(progress) % 10 == 0 and int(progress) != int(progress_data.get('last_logged_progress', -1)):
+                        app.logger.info(f"FFMPEG_PROGRESS: {quality} conversion - {progress:.1f}% complete")
+                        progress_data['last_logged_progress'] = progress
                     
     except Exception as e:
+        app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
         print(f"Error monitoring FFmpeg progress: {e}")
 
 def create_master_playlist(output_folder_name, qualities):
@@ -426,8 +545,35 @@ def index():
     
     return render_template('simple_index.html', movies=movie_data)
 
+@app.route('/reset-stuck', methods=['POST'])
+def reset_stuck_conversions():
+    try:
+        # Find all stuck movies
+        stuck_movies = Movie.query.filter_by(status='IN_PROGRESS').all()
+        
+        for movie in stuck_movies:
+            movie.status = 'ERROR'  # or 'NEW' if you want to retry
+            movie.overall_progress = 0
+            app.logger.warning(f"RESET_STUCK: Movie {movie.id} reset from IN_PROGRESS to ERROR")
+        
+        db.session.commit()
+        
+        # Clear conversion status
+        global conversion_status
+        conversion_status.clear()
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Reset {len(stuck_movies)} stuck conversions'
+        })
+        
+    except Exception as e:
+        app.logger.error(f"ERROR_RESET_STUCK: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/scan', methods=['POST'])
 def scan_folder():
+    app.logger.info(f"SCAN_INITIATED: Starting folder scan")
     try:
         video_files = scan_input_folder()
         new_files = 0
@@ -454,13 +600,16 @@ def scan_folder():
                 new_files += 1
         
         db.session.commit()
+        app.logger.info(f"SCAN_COMPLETE: Found {new_files} new files out of {len(video_files)} total files")
         return jsonify({'success': True, 'new_files': new_files})
         
     except Exception as e:
+        app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/convert/<movie_id>', methods=['POST'])
 def start_conversion(movie_id):
+    app.logger.info(f"CONVERSION_REQUEST: Movie {movie_id} conversion requested")
     try:
         movie = Movie.query.get_or_404(movie_id)
         
@@ -476,10 +625,11 @@ def start_conversion(movie_id):
         thread = threading.Thread(target=convert_video_simple, args=(movie_id,))
         thread.daemon = True
         thread.start()
-        
+        app.logger.info(f"CONVERSION_THREAD_STARTED: Background conversion started for Movie {movie_id}")
         return jsonify({'success': True, 'message': 'Conversion started'})
         
     except Exception as e:
+        app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/status/<movie_id>')
@@ -495,6 +645,7 @@ def get_status(movie_id):
 
 @app.route('/delete/<movie_id>', methods=['POST'])
 def delete_movie(movie_id):
+    app.logger.info(f"DELETE_REQUEST: Movie {movie_id} deletion requested")
     try:
         movie = Movie.query.get_or_404(movie_id)
         
@@ -515,9 +666,11 @@ def delete_movie(movie_id):
         if movie_id in conversion_status:
             del conversion_status[movie_id]
         
+        app.logger.info(f"DELETE_COMPLETE: Movie {movie_id} successfully deleted")
         return jsonify({'success': True, 'message': 'Movie deleted'})
         
     except Exception as e:
+        app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 def migrate_database():
@@ -528,7 +681,8 @@ def migrate_database():
             # Try to add the column if it doesn't exist
             db.engine.execute('ALTER TABLE movie ADD COLUMN subdirectory VARCHAR(255)')
             print("Added subdirectory column to database")
-        except:
+        except Exception as e:
+            app.logger.error(f"ERROR_[CONTEXT]: {str(e)}", exc_info=True)
             print("Subdirectory column already exists or migration not needed")
 
 
