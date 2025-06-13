@@ -12,15 +12,22 @@ import string
 import json
 
 # Simple Flask app without Celery
+# Configuration
+BASE_DIR = Path(__file__).parent
+DATABASE_PATH = BASE_DIR / 'data' / 'simple_video_dashboard.db'
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'simple-video-dashboard'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///simple_video_dashboard.db'
+# app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///simple_video_dashboard.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DATABASE_PATH}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Configuration
-BASE_DIR = Path(__file__).parent
+
+
+# Create data directory if it doesn't exist
+(BASE_DIR / 'data').mkdir(exist_ok=True)
+print(f"Database will be created at: {DATABASE_PATH}")
 INPUT_FOLDER = BASE_DIR / 'INPUT'
 OUTPUT_FOLDER = BASE_DIR / 'OUTPUT'
 SEGMENT_DURATION = 10
@@ -38,13 +45,13 @@ OUTPUT_FOLDER.mkdir(exist_ok=True)
 # Global conversion status
 conversion_status = {}
 
-# Database Models
 class Movie(db.Model):
     id = db.Column(db.String(8), primary_key=True)
     filename = db.Column(db.String(255), nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
     file_size = db.Column(db.BigInteger, nullable=False)
     source_resolution = db.Column(db.String(20))
+    subdirectory = db.Column(db.String(255))  # NEW FIELD
     status = db.Column(db.String(20), default='NEW')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = db.Column(db.DateTime)
@@ -62,6 +69,15 @@ class Movie(db.Model):
             movie_id = f"MOV{digits}"
             if not Movie.query.filter_by(id=movie_id).first():
                 return movie_id
+    
+    def get_output_folder_name(self):
+        """Generate output folder name based on movie ID and subdirectory"""
+        if self.subdirectory:
+            # Clean subdirectory name for folder naming
+            clean_subdir = self.subdirectory.replace(' ', '_').replace('/', '_').replace('\\', '_')
+            return f"{self.id}_{clean_subdir}"
+        else:
+            return self.id
     
     def get_target_qualities(self):
         if not self.source_resolution:
@@ -112,171 +128,34 @@ def format_file_size(size_bytes):
     return f"{size_bytes:.1f}{size_names[i]}"
 
 def scan_input_folder():
+    """Scan INPUT folder and all subdirectories for video files"""
     video_files = []
     
     if not INPUT_FOLDER.exists():
         return video_files
     
-    for file_path in INPUT_FOLDER.iterdir():
+    # Recursively scan all subdirectories
+    for file_path in INPUT_FOLDER.rglob('*'):  # rglob for recursive scanning
         if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_FORMATS:
             try:
                 file_size = file_path.stat().st_size
                 video_info = get_video_info(str(file_path))
                 
+                # Get subdirectory name (relative to INPUT folder)
+                relative_path = file_path.relative_to(INPUT_FOLDER)
+                subdirectory = relative_path.parent.name if relative_path.parent != Path('.') else None
+                
                 video_files.append({
                     'filename': file_path.name,
                     'file_path': str(file_path),
                     'file_size': file_size,
-                    'video_info': video_info
+                    'video_info': video_info,
+                    'subdirectory': subdirectory  # New field
                 })
             except Exception as e:
                 print(f"Error processing file {file_path}: {e}")
     
     return video_files
-
-# def convert_video_simple(movie_id):
-#     """Simple video conversion with better error handling"""
-#     global conversion_status
-    
-#     with app.app_context():
-#         try:
-#             movie = db.session.get(Movie, movie_id)  # Fixed SQLAlchemy call
-#             if not movie:
-#                 return
-            
-#             # Update status
-#             movie.status = 'IN_PROGRESS'
-#             movie.overall_progress = 0
-#             db.session.commit()
-#             conversion_status[movie_id] = {'status': 'IN_PROGRESS', 'progress': 0}
-            
-#             # Check if input file exists
-#             if not os.path.exists(movie.file_path):
-#                 raise FileNotFoundError(f"Input file not found: {movie.file_path}")
-            
-#             # Get video info
-#             if not movie.source_resolution:
-#                 video_info = get_video_info(movie.file_path)
-#                 if video_info:
-#                     movie.source_resolution = video_info['resolution']
-#                     db.session.commit()
-            
-#             # Create output directory
-#             output_dir = OUTPUT_FOLDER / movie_id
-#             output_dir.mkdir(exist_ok=True)
-            
-#             target_qualities = movie.get_target_qualities()
-            
-#             if not target_qualities:
-#                 movie.status = 'DONE'
-#                 movie.overall_progress = 100
-#                 movie.completed_at = datetime.now(timezone.utc)
-#                 db.session.commit()
-#                 conversion_status[movie_id] = {'status': 'DONE', 'progress': 100}
-#                 return
-            
-#             # Convert each quality
-#             completed_qualities = []
-#             total_qualities = len(target_qualities)
-            
-#             for i, quality in enumerate(target_qualities):
-#                 try:
-#                     quality_config = QUALITIES[quality]
-#                     quality_dir = output_dir / quality
-#                     quality_dir.mkdir(exist_ok=True)
-#                     playlist_path = quality_dir / 'playlist.m3u8'
-                    
-#                     # Update progress
-#                     progress = int((i / total_qualities) * 90)
-#                     movie.overall_progress = progress
-#                     db.session.commit()
-#                     conversion_status[movie_id] = {'status': 'IN_PROGRESS', 'progress': progress}
-                    
-#                     print(f"Converting {movie.filename} to {quality}...")
-                    
-#                     # More detailed FFmpeg command
-#                     try:
-#                         input_stream = ffmpeg.input(movie.file_path)
-
-#                         # Use the following line to create a basic HLS output
-#                         # output_stream = input_stream.output(
-#                         #     str(playlist_path),
-#                         #     vf=f"scale={quality_config['resolution']}",
-#                         #     vcodec='libx264',
-#                         #     vb=quality_config['bitrate'],
-#                         #     acodec='aac',
-#                         #     ab='128k',
-#                         #     f='hls',
-#                         #     hls_time=SEGMENT_DURATION,
-#                         #     hls_playlist_type='vod',
-#                         #     hls_segment_filename=str(quality_dir / 'segment_%03d.ts'),
-#                         #     hls_flags='independent_segments'
-#                         # )
-
-#                         # ADD THESE TO FORCE CONSISTENT SEGMENTS using Claude troubleshooting
-#                         output_stream = input_stream.output(
-#                             str(playlist_path),
-#                             vf=f"scale={quality_config['resolution']}",
-#                             vcodec='libx264',
-#                             vb=quality_config['bitrate'],
-#                             acodec='aac',
-#                             ab='128k',
-#                             f='hls',
-#                             hls_time=SEGMENT_DURATION,
-#                             hls_playlist_type='vod',
-#                             hls_segment_filename=str(quality_dir / 'segment_%03d.ts'),
-#                             hls_flags='independent_segments',
-    
-#                             # ADD THESE TO FORCE CONSISTENT SEGMENTS:
-#                             force_key_frames=f'expr:gte(t,n_forced*{SEGMENT_DURATION})',  # Force keyframes every 10 seconds
-#                             g=f'{SEGMENT_DURATION * 25}',  # GOP size (assuming 25fps)
-#                             keyint_min=f'{SEGMENT_DURATION * 25}',  # Minimum keyframe interval
-#                             sc_threshold=0,  # Disable scene change detection
-#                         )
-                        
-#                         # Run with error capture
-#                         ffmpeg.run(output_stream, overwrite_output=True, capture_stdout=True, capture_stderr=True)
-#                         completed_qualities.append(quality)
-#                         print(f"Completed {quality} conversion")
-                        
-#                     except ffmpeg.Error as e:
-#                         error_message = e.stderr.decode('utf-8') if e.stderr else "Unknown FFmpeg error"
-#                         print(f"FFmpeg error for {quality}: {error_message}")
-#                         # Continue with other qualities
-                        
-#                 except Exception as e:
-#                     print(f"Error converting {quality}: {e}")
-            
-#             # Create master playlist
-#             if completed_qualities:
-#                 create_master_playlist(movie_id, completed_qualities)
-#                 print(f"Created master playlist with qualities: {completed_qualities}")
-            
-#             # Update final status
-#             movie.status = 'DONE' if completed_qualities else 'ERROR'
-#             movie.overall_progress = 100
-#             movie.completed_at = datetime.now(timezone.utc)
-#             db.session.commit()
-            
-#             conversion_status[movie_id] = {
-#                 'status': movie.status, 
-#                 'progress': 100,
-#                 'completed_qualities': completed_qualities
-#             }
-            
-#             print(f"Conversion completed for {movie.filename} - Status: {movie.status}")
-            
-#         except Exception as e:
-#             print(f"Error in conversion: {e}")
-#             try:
-#                 movie = db.session.get(Movie, movie_id)  # Fixed SQLAlchemy call
-#                 if movie:
-#                     movie.status = 'ERROR'
-#                     movie.completed_at = datetime.now()
-#                     db.session.commit()
-#             except:
-#                 pass
-#             conversion_status[movie_id] = {'status': 'ERROR', 'progress': 0}
 
 import threading
 import time
@@ -284,7 +163,7 @@ import re
 from datetime import datetime
 
 def convert_video_simple(movie_id):
-    """Simple video conversion with real-time progress updates"""
+    """Simple video conversion with subdirectory support"""
     global conversion_status
     
     with app.app_context():
@@ -299,8 +178,10 @@ def convert_video_simple(movie_id):
             db.session.commit()
             conversion_status[movie_id] = {'status': 'IN_PROGRESS', 'progress': 0}
             
+            # Display subdirectory info
+            subdir_info = f" (Subdirectory: {movie.subdirectory})" if movie.subdirectory else " (Root folder)"
             print(f"\n🎬 Starting conversion for Movie ID: {movie_id}")
-            print(f"📁 File: {movie.filename}")
+            print(f"📁 File: {movie.filename}{subdir_info}")
             print("=" * 60)
             
             # Get video info including duration
@@ -311,9 +192,12 @@ def convert_video_simple(movie_id):
                 movie.source_resolution = video_info['resolution']
                 db.session.commit()
             
-            # Create output directory
-            output_dir = OUTPUT_FOLDER / movie_id
+            # Create output directory with new naming convention
+            output_folder_name = movie.get_output_folder_name()
+            output_dir = OUTPUT_FOLDER / output_folder_name
             output_dir.mkdir(exist_ok=True)
+            
+            print(f"📂 Output directory: {output_folder_name}")
             
             target_qualities = movie.get_target_qualities()
             
@@ -329,7 +213,7 @@ def convert_video_simple(movie_id):
             progress_data = {'current_progress': 0, 'current_quality': '', 'stop_monitoring': False}
             monitor_thread = threading.Thread(
                 target=monitor_progress, 
-                args=(movie_id, movie.filename, progress_data),
+                args=(movie_id, movie.filename, progress_data, movie.subdirectory),
                 daemon=True
             )
             monitor_thread.start()
@@ -406,7 +290,7 @@ def convert_video_simple(movie_id):
             
             # Create master playlist
             if completed_qualities:
-                create_master_playlist(movie_id, completed_qualities)
+                create_master_playlist(output_folder_name, completed_qualities)  # Updated function call
                 print(f"\n📋 Created master playlist with qualities: {completed_qualities}")
             
             # Update final status
@@ -422,6 +306,7 @@ def convert_video_simple(movie_id):
             }
             
             print(f"\n🎉 Conversion completed for {movie.filename}")
+            print(f"📂 Output folder: {output_folder_name}")
             print(f"📊 Final Status: {movie.status}")
             print(f"🏁 Finished at: {datetime.now().strftime('%H:%M:%S')}")
             print("=" * 60)
@@ -437,6 +322,29 @@ def convert_video_simple(movie_id):
             except:
                 pass
             conversion_status[movie_id] = {'status': 'ERROR', 'progress': 0}
+
+def monitor_progress(movie_id, filename, progress_data, subdirectory=None):
+    """Background thread to display progress every 30 seconds"""
+    last_update = time.time()
+    
+    while not progress_data['stop_monitoring']:
+        current_time = time.time()
+        
+        # Update every 30 seconds
+        if current_time - last_update >= 30:
+            if progress_data['current_quality'] and progress_data['current_progress'] > 0:
+                subdir_info = f" (📁 {subdirectory})" if subdirectory else " (📁 Root)"
+                print(f"\n📈 PROGRESS UPDATE:")
+                print(f"   🎬 Movie ID: {movie_id}")
+                print(f"   📁 File: {filename}{subdir_info}")
+                print(f"   🎯 Quality: {progress_data['current_quality']}")
+                print(f"   ⚡ Progress: {progress_data['current_progress']:.3f}%")
+                print(f"   🕐 Time: {datetime.now().strftime('%H:%M:%S')}")
+                print("-" * 40)
+            
+            last_update = current_time
+        
+        time.sleep(5)  # Check every 5 seconds, update every 30
 
 def monitor_ffmpeg_progress(process, total_duration, progress_data, quality):
     """Monitor FFmpeg stderr for progress information"""
@@ -467,30 +375,9 @@ def monitor_ffmpeg_progress(process, total_duration, progress_data, quality):
     except Exception as e:
         print(f"Error monitoring FFmpeg progress: {e}")
 
-def monitor_progress(movie_id, filename, progress_data):
-    """Background thread to display progress every 30 seconds"""
-    last_update = time.time()
-    
-    while not progress_data['stop_monitoring']:
-        current_time = time.time()
-        
-        # Update every 30 seconds
-        if current_time - last_update >= 30:
-            if progress_data['current_quality'] and progress_data['current_progress'] > 0:
-                print(f"\n📈 PROGRESS UPDATE:")
-                print(f"   🎬 Movie ID: {movie_id}")
-                print(f"   📁 File: {filename}")
-                print(f"   🎯 Quality: {progress_data['current_quality']}")
-                print(f"   ⚡ Progress: {progress_data['current_progress']:.3f}%")
-                print(f"   🕐 Time: {datetime.now().strftime('%H:%M:%S')}")
-                print("-" * 40)
-            
-            last_update = current_time
-        
-        time.sleep(5)  # Check every 5 seconds, update every 30
-
-def create_master_playlist(movie_id, qualities):
-    output_dir = OUTPUT_FOLDER / movie_id
+def create_master_playlist(output_folder_name, qualities):
+    """Create master playlist with updated folder naming"""
+    output_dir = OUTPUT_FOLDER / output_folder_name
     master_playlist_path = output_dir / 'master.m3u8'
     
     playlist_content = "#EXTM3U\n#EXT-X-VERSION:3\n"
@@ -510,22 +397,29 @@ def create_master_playlist(movie_id, qualities):
     with open(master_playlist_path, 'w') as f:
         f.write(playlist_content)
 
-# Routes
 @app.route('/')
 def index():
     movies = Movie.query.order_by(Movie.created_at.desc()).all()
     
     movie_data = []
     for movie in movies:
+        # Create display name with subdirectory
+        display_name = movie.filename
+        if movie.subdirectory:
+            display_name = f"{movie.subdirectory}/{movie.filename}"
+        
         movie_dict = {
             'id': movie.id,
             'filename': movie.filename,
+            'display_name': display_name,  # For HTML display
+            'subdirectory': movie.subdirectory,
             'file_size': movie.file_size,
             'file_size_formatted': format_file_size(movie.file_size),
             'source_resolution': movie.source_resolution,
             'status': movie.status,
             'overall_progress': movie.overall_progress,
             'target_qualities': movie.get_target_qualities(),
+            'output_folder': movie.get_output_folder_name(),  # For display
             'created_at': movie.created_at.strftime('%Y-%m-%d %H:%M') if movie.created_at else ''
         }
         movie_data.append(movie_dict)
@@ -539,13 +433,18 @@ def scan_folder():
         new_files = 0
         
         for file_info in video_files:
-            existing_movie = Movie.query.filter_by(filename=file_info['filename']).first()
+            # Check for existing movie by both filename and subdirectory
+            existing_movie = Movie.query.filter_by(
+                filename=file_info['filename'],
+                subdirectory=file_info['subdirectory']
+            ).first()
             
             if not existing_movie:
                 movie = Movie(
                     filename=file_info['filename'],
                     file_path=file_info['file_path'],
-                    file_size=file_info['file_size']
+                    file_size=file_info['file_size'],
+                    subdirectory=file_info['subdirectory']  # Store subdirectory
                 )
                 
                 if file_info['video_info']:
@@ -621,9 +520,22 @@ def delete_movie(movie_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def migrate_database():
+    """Add subdirectory column to existing database"""
+    print("NOW MIGRATING")
+    with app.app_context():
+        try:
+            # Try to add the column if it doesn't exist
+            db.engine.execute('ALTER TABLE movie ADD COLUMN subdirectory VARCHAR(255)')
+            print("Added subdirectory column to database")
+        except:
+            print("Subdirectory column already exists or migration not needed")
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        migrate_database()
     
     print("Simple Video Processing Dashboard")
     print("Open your browser and go to: http://localhost:5000")
