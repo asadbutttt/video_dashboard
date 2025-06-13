@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Dashboard Header -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h1 class="h3 mb-0">
+                <i class="bi bi-collection-play"></i>
+                Video Processing Dashboard
+            </h1>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-primary" onclick="refreshDashboard()">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    Refresh
+                </button>
+                <button class="btn btn-primary" onclick="scanFolder()">
+                    <i class="bi bi-folder-plus"></i>
+                    Scan INPUT Folder
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistics Cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="total-movies">{{ movies|length }}</h4>
+                        <p class="card-text">Total Movies</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-collection-play fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="completed-movies">
+                            {{ movies|selectattr('status', 'equalto', 'DONE')|list|length }}
+                        </h4>
+                        <p class="card-text">Completed</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-check-circle fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="queue-length">{{ queue_length }}</h4>
+                        <p class="card-text">In Queue</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-clock fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-danger text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="in-progress">
+                            {{ movies|selectattr('status', 'equalto', 'IN_PROGRESS')|list|length }}
+                        </h4>
+                        <p class="card-text">Processing</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="bi bi-gear fs-1"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Movies Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-table"></i>
+                    Movies
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if movies %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Movie ID</th>
+                                <th>Filename</th>
+                                <th>Size</th>
+                                <th>Source</th>
+                                <th>Target Qualities</th>
+                                <th>Progress</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="movies-table-body">
+                            {% for movie in movies %}
+                            <tr id="movie-row-{{ movie.id }}" data-movie-id="{{ movie.id }}">
+                                <td>
+                                    <code class="text-primary">{{ movie.id }}</code>
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <i class="bi bi-file-earmark-play me-2"></i>
+                                        <span title="{{ movie.filename }}">
+                                            {{ movie.filename[:30] }}{% if movie.filename|length > 30 %}...{% endif %}
+                                        </span>
+                                    </div>
+                                </td>
+                                <td>{{ movie.file_size_formatted }}</td>
+                                <td>
+                                    {% if movie.source_resolution %}
+                                        <span class="badge bg-info">{{ movie.source_resolution }}</span>
+                                    {% else %}
+                                        <span class="text-muted">Unknown</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small class="text-muted">{{ movie.target_qualities_str }}</small>
+                                </td>
+                                <td>
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar progress-bar-striped" 
+                                             id="progress-{{ movie.id }}"
+                                             role="progressbar" 
+                                             style="width: {{ movie.overall_progress }}%"
+                                             aria-valuenow="{{ movie.overall_progress }}" 
+                                             aria-valuemin="0" 
+                                             aria-valuemax="100">
+                                            {{ movie.overall_progress }}%
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="badge bg-{{ movie.status_color }}" id="status-{{ movie.id }}">
+                                        {{ movie.status_icon }} {{ movie.status }}
+                                        {% if movie.queue_position %}
+                                            (#{{ movie.queue_position }})
+                                        {% endif %}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm" role="group">
+                                        {% if movie.status == 'NEW' or movie.status == 'ERROR' %}
+                                            <button class="btn btn-success" 
+                                                    onclick="startConversion('{{ movie.id }}')"
+                                                    id="convert-btn-{{ movie.id }}">
+                                                <i class="bi bi-play-circle"></i>
+                                                Convert
+                                            </button>
+                                        {% elif movie.status == 'QUEUED' %}
+                                            <button class="btn btn-warning" 
+                                                    onclick="cancelConversion('{{ movie.id }}')"
+                                                    id="cancel-btn-{{ movie.id }}">
+                                                <i class="bi bi-x-circle"></i>
+                                                Cancel
+                                            </button>
+                                        {% elif movie.status == 'DONE' %}
+                                            <button class="btn btn-info" 
+                                                    onclick="viewFiles('{{ movie.id }}')"
+                                                    id="view-btn-{{ movie.id }}">
+                                                <i class="bi bi-folder2-open"></i>
+                                                View Files
+                                            </button>
+                                        {% endif %}
+                                        
+                                        {% if movie.status != 'IN_PROGRESS' %}
+                                            <button class="btn btn-danger" 
+                                                    onclick="deleteMovie('{{ movie.id }}')"
+                                                    id="delete-btn-{{ movie.id }}">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-5">
+                    <i class="bi bi-inbox display-1 text-muted"></i>
+                    <h4 class="text-muted mt-3">No movies found</h4>
+                    <p class="text-muted">
+                        Add video files to the INPUT folder and click "Scan INPUT Folder" to get started.
+                    </p>
+                    <button class="btn btn-primary" onclick="scanFolder()">
+                        <i class="bi bi-folder-plus"></i>
+                        Scan INPUT Folder
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Instructions Card -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card border-info">
+            <div class="card-header bg-info text-white">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-info-circle"></i>
+                    How to Use
+                </h5>
+            </div>
+            <div class="card-body">
+                <ol class="mb-0">
+                    <li><strong>Add Videos:</strong> Copy your video files to the <code>INPUT</code> folder</li>
+                    <li><strong>Scan:</strong> Click "Scan INPUT Folder" to detect new videos</li>
+                    <li><strong>Convert:</strong> Click the "Convert" button for each movie you want to process</li>
+                    <li><strong>Monitor:</strong> Watch the progress in real-time</li>
+                    <li><strong>Access:</strong> Find converted HLS files in the <code>OUTPUT/{movie_id}/</code> folder</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Initialize dashboard when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    initializeDashboard();
+});
+</script>
+{% endblock %}
