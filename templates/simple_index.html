@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Video Processing Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .progress { height: 25px; }
+        .status-new { color: #ffc107; }
+        .status-in-progress { color: #dc3545; }
+        .status-done { color: #198754; }
+        .status-error { color: #6c757d; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container">
+            <span class="navbar-brand">
+                <i class="bi bi-camera-video"></i>
+                Simple Video Dashboard
+            </span>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Header -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h1 class="h3">Video Processing Dashboard</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="scanFolder()">
+                            <i class="bi bi-folder-plus"></i>
+                            Scan INPUT Folder
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="location.reload()">
+                            <i class="bi bi-arrow-clockwise"></i>
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Statistics -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card bg-primary text-white">
+                    <div class="card-body">
+                        <h4>{{ movies|length }}</h4>
+                        <p class="mb-0">Total Movies</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-success text-white">
+                    <div class="card-body">
+                        <h4>{{ movies|selectattr('status', 'equalto', 'DONE')|list|length }}</h4>
+                        <p class="mb-0">Completed</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-danger text-white">
+                    <div class="card-body">
+                        <h4>{{ movies|selectattr('status', 'equalto', 'IN_PROGRESS')|list|length }}</h4>
+                        <p class="mb-0">Processing</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-warning text-white">
+                    <div class="card-body">
+                        <h4>{{ movies|selectattr('status', 'equalto', 'NEW')|list|length }}</h4>
+                        <p class="mb-0">Ready to Convert</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Movies Table -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Movies</h5>
+            </div>
+            <div class="card-body">
+                {% if movies %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Movie ID</th>
+                                <th>Filename</th>
+                                <th>Size</th>
+                                <th>Resolution</th>
+                                <th>Target Qualities</th>
+                                <th>Progress</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for movie in movies %}
+                            <tr id="movie-{{ movie.id }}">
+                                <td><code>{{ movie.id }}</code></td>
+                                <td>
+                                    <i class="bi bi-file-earmark-play me-2"></i>
+                                    {{ movie.filename[:40] }}{% if movie.filename|length > 40 %}...{% endif %}
+                                </td>
+                                <td>{{ movie.file_size_formatted }}</td>
+                                <td>
+                                    {% if movie.source_resolution %}
+                                        <span class="badge bg-info">{{ movie.source_resolution }}</span>
+                                    {% else %}
+                                        <span class="text-muted">Unknown</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small class="text-muted">{{ movie.target_qualities|join(', ') }}</small>
+                                </td>
+                                <td>
+                                    <div class="progress">
+                                        <div class="progress-bar {% if movie.status == 'IN_PROGRESS' %}progress-bar-striped progress-bar-animated{% endif %}" 
+                                             style="width: {{ movie.overall_progress }}%">
+                                            {{ movie.overall_progress }}%
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    {% if movie.status == 'NEW' %}
+                                        <span class="badge bg-warning">🟡 NEW</span>
+                                    {% elif movie.status == 'IN_PROGRESS' %}
+                                        <span class="badge bg-danger">🔴 PROCESSING</span>
+                                    {% elif movie.status == 'DONE' %}
+                                        <span class="badge bg-success">🟢 DONE</span>
+                                    {% elif movie.status == 'ERROR' %}
+                                        <span class="badge bg-dark">⚫ ERROR</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if movie.status == 'NEW' or movie.status == 'ERROR' %}
+                                        <button class="btn btn-success btn-sm" onclick="startConversion('{{ movie.id }}')">
+                                            <i class="bi bi-play-circle"></i> Convert
+                                        </button>
+                                    {% elif movie.status == 'DONE' %}
+                                        <button class="btn btn-info btn-sm" onclick="viewFiles('{{ movie.id }}')">
+                                            <i class="bi bi-folder2-open"></i> View
+                                        </button>
+                                    {% endif %}
+                                    
+                                    {% if movie.status != 'IN_PROGRESS' %}
+                                        <button class="btn btn-danger btn-sm" onclick="deleteMovie('{{ movie.id }}')">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-5">
+                    <i class="bi bi-inbox display-1 text-muted"></i>
+                    <h4 class="text-muted mt-3">No movies found</h4>
+                    <p class="text-muted">Add video files to the INPUT folder and click "Scan INPUT Folder"</p>
+                    <button class="btn btn-primary" onclick="scanFolder()">
+                        <i class="bi bi-folder-plus"></i> Scan INPUT Folder
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="card mt-4 border-info">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">How to Use</h5>
+            </div>
+            <div class="card-body">
+                <ol class="mb-0">
+                    <li>Copy your video files to the <code>INPUT</code> folder</li>
+                    <li>Click "Scan INPUT Folder" to detect new videos</li>
+                    <li>Click "Convert" for each video you want to process</li>
+                    <li>Wait for conversion to complete (one video at a time)</li>
+                    <li>Find converted files in <code>OUTPUT/{movie_id}/</code></li>
+                </ol>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast for notifications -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="toast" class="toast" role="alert">
+            <div class="toast-header">
+                <strong class="me-auto">Video Dashboard</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body" id="toast-body"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function showToast(message, type = 'info') {
+            const toast = document.getElementById('toast');
+            const toastBody = document.getElementById('toast-body');
+            toast.className = `toast border-${type}`;
+            toastBody.textContent = message;
+            new bootstrap.Toast(toast).show();
+        }
+
+        function scanFolder() {
+            fetch('/scan', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast(`Found ${data.new_files} new files`, 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showToast(data.error || 'Scan failed', 'danger');
+                    }
+                })
+                .catch(error => {
+                    showToast('Scan failed: ' + error.message, 'danger');
+                });
+        }
+
+        function startConversion(movieId) {
+            fetch(`/convert/${movieId}`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast(data.message, 'success');
+                        setTimeout(() => location.reload(), 1000);
+                    } else {
+                        showToast(data.error || 'Conversion failed', 'danger');
+                    }
+                })
+                .catch(error => {
+                    showToast('Conversion failed: ' + error.message, 'danger');
+                });
+        }
+
+        function deleteMovie(movieId) {
+            if (!confirm('Are you sure you want to delete this movie?')) return;
+            
+            fetch(`/delete/${movieId}`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast(data.message, 'success');
+                        document.getElementById(`movie-${movieId}`).remove();
+                    } else {
+                        showToast(data.error || 'Delete failed', 'danger');
+                    }
+                })
+                .catch(error => {
+                    showToast('Delete failed: ' + error.message, 'danger');
+                });
+        }
+
+        function viewFiles(movieId) {
+            showToast(`Files are in OUTPUT/${movieId}/ folder`, 'info');
+        }
+
+        // Auto-refresh for active conversions
+        function checkProgress() {
+            const inProgressRows = document.querySelectorAll('tr[id^="movie-"] .badge.bg-danger');
+            if (inProgressRows.length > 0) {
+                setTimeout(() => location.reload(), 5000);
+            }
+        }
+
+        // Check for active conversions on page load
+        document.addEventListener('DOMContentLoaded', checkProgress);
+    </script>
+</body>
+</html>

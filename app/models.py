@@ -11,7 +11,7 @@ class Movie(db.Model):
     file_size = db.Column(db.BigInteger, nullable=False)
     source_resolution = db.Column(db.String(20))
     status = db.Column(db.String(20), default='NEW')  # NEW, QUEUED, IN_PROGRESS, DONE, ERROR
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
     started_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
     overall_progress = db.Column(db.Integer, default=0)
@@ -98,7 +98,7 @@ class QualityVariant(db.Model):
     file_path = db.Column(db.String(500))
     segment_count = db.Column(db.Integer, default=0)
     duration = db.Column(db.Float)  # in seconds
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
     completed_at = db.Column(db.DateTime)
     error_message = db.Column(db.Text)
     
@@ -116,7 +116,7 @@ class ConversionQueue(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     movie_id = db.Column(db.String(8), db.ForeignKey('movie.id'), nullable=False)
     position = db.Column(db.Integer, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
     
     movie = db.relationship('Movie', backref='queue_entry')
     

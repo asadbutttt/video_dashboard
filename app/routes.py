@@ -11,9 +11,6 @@ main = Blueprint('main', __name__)
 @main.route('/')
 def index():
     """Main dashboard page"""
-    # Scan for new files first
-    scan_input_folder_task.delay()
-    
     # Get all movies
     movies = Movie.query.order_by(Movie.created_at.desc()).all()
     
@@ -232,7 +229,7 @@ def handle_status_request(data):
     """Handle status request for specific movie"""
     movie_id = data.get('movie_id')
     if movie_id:
-        movie = Movie.query.get(movie_id)
+        movie = db.session.get(Movie, movie_id)
         if movie:
             emit('status_update', {
                 'movie_id': movie_id,

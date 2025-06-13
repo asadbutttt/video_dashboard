@@ -18,13 +18,13 @@ def convert_video_task(self, movie_id):
     """Main task to convert video to multiple HLS qualities"""
     try:
         # Get movie from database
-        movie = Movie.query.get(movie_id)
+        movie = db.session.get(Movie, movie_id)
         if not movie:
             return {'error': 'Movie not found'}
         
         # Update status to IN_PROGRESS
         movie.status = 'IN_PROGRESS'
-        movie.started_at = datetime.utcnow()
+        movie.started_at = datetime.now()
         db.session.commit()
         
         # Emit status update
@@ -49,7 +49,7 @@ def convert_video_task(self, movie_id):
         
         if not target_qualities:
             movie.status = 'DONE'
-            movie.completed_at = datetime.utcnow()
+            movie.completed_at = datetime.now()
             movie.overall_progress = 100
             db.session.commit()
             
@@ -90,7 +90,7 @@ def convert_video_task(self, movie_id):
                 if success:
                     variant.status = 'DONE'
                     variant.progress = 100
-                    variant.completed_at = datetime.utcnow()
+                    variant.completed_at = datetime.now()
                     completed_qualities.append(quality)
                 else:
                     variant.status = 'ERROR'
@@ -130,7 +130,7 @@ def convert_video_task(self, movie_id):
             movie.status = 'ERROR'
             movie.error_message = 'All quality conversions failed'
         
-        movie.completed_at = datetime.utcnow()
+        movie.completed_at = datetime.now()
         movie.overall_progress = 100
         db.session.commit()
         
@@ -163,11 +163,11 @@ def convert_video_task(self, movie_id):
         print(f"Error in convert_video_task for {movie_id}: {e}")
         
         # Update movie status to error
-        movie = Movie.query.get(movie_id)
+        movie = db.session.get(Movie, movie_id)
         if movie:
             movie.status = 'ERROR'
             movie.error_message = str(e)
-            movie.completed_at = datetime.utcnow()
+            movie.completed_at = datetime.now()
             db.session.commit()
             
             # Remove from queue
@@ -273,11 +273,12 @@ def process_next_in_queue():
 
 @celery.task
 def scan_input_folder_task():
-    """Periodic task to scan input folder for new files"""
+    """Task to scan input folder for new files"""
     from app.utils import scan_input_folder
     
     try:
         video_files = scan_input_folder()
+        new_files = 0
         
         for file_info in video_files:
             # Check if movie already exists
@@ -298,11 +299,12 @@ def scan_input_folder_task():
                 
                 db.session.add(movie)
                 db.session.commit()
+                new_files += 1
                 
                 # Emit new movie event
                 socketio.emit('new_movie', movie.to_dict())
         
-        return {'scanned_files': len(video_files)}
+        return {'scanned_files': len(video_files), 'new_files': new_files}
         
     except Exception as e:
         print(f"Error scanning input folder: {e}")

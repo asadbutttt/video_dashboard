@@ -3,6 +3,5 @@ Flask-SQLAlchemy==3.0.5
 Flask-SocketIO==5.3.6
 Celery==5.3.4
 Redis==5.0.1
-Watchdog==3.0.0
 ffmpeg-python==0.2.0
 python-dotenv==1.0.0
